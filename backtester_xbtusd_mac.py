@@ -1,19 +1,22 @@
 """
 Report:
 The backtest with the bare-bones MAC(20,50) strategy is profitable.
-Also, a threshold for the MAC signal of .2*stdev(returns) has been added, which 
-apparently improves the performance. 
-However, when you change the "lookback_intervals" argument of the MAC_Strategy 
-class from 20 to some other value the performance of the backtester is affected, 
-which is unexptected since this variable is seemingly not being used in the 
-MAC strategy.
+Also, the threshold for the MAC signal seems to reduce maximum drawdown but
+also reduces the overall performance.
 """
 
-
 import datetime as dt
+import pandas as pd
+from pandas_datareader import data as web
+import matplotlib.pyplot as plt
+from matplotlib.ticker import FuncFormatter
+
 
 class TickData:
-    """ Stores single unit of data. """
+    """
+    Stores a single unit of data received from a market data source.
+
+    """
 
     def __init__(self, symbol, timestamp, last_price=0, total_volume=0):
         self.symbol = symbol
@@ -22,7 +25,15 @@ class TickData:
         self.last_price = last_price
         self.total_volume = total_volume
 
+
 class MarketData:
+    """
+    An instance of this class is used throughout the system to store and
+    retrieve prices by the various components. Essentially, a container is used
+    to store the last tick data.
+
+    """
+
     def __init__(self):
         self.__recent_ticks__ = dict()
 
@@ -50,12 +61,13 @@ class MarketData:
     def get_timestamp(self, symbol):
         return self.__recent_ticks__[symbol].timestamp
 
-""" Download prices from an external data source. """
-# Import pandas and the pandas datareader.
-import pandas as pd
-from pandas_datareader import data as web
 
 class MarketDataSource:
+    """
+    Download prices from an external data source.
+
+    """
+
     def __init__(self):
         self.event_tick = None
         self.ticker, self.source = None, None
@@ -63,23 +75,32 @@ class MarketDataSource:
         self.md = MarketData()
 
     def start_market_simulation(self):
-        data = pd.read_csv('XBTUSD_past1000_days.csv', parse_dates=['timestamp'])
+        data = pd.read_csv('XBTUSD_past1000_days.csv',
+                           parse_dates=['timestamp'])
         data['Date'] = data['timestamp'].dt.date
         data = data.set_index('Date')
-        data = data.drop(['timestamp'], axis = 1)
-        data = data.rename(columns={"open": "Open", "close": "Close", "volume": "Volume"}) 
+        data = data.drop(['timestamp'], axis=1)
+        data = data.rename(columns={"open": "Open", "close": "Close", "volume":
+                           "Volume"})
         data = data.iloc[::-1]
 
         for time, row in data.iterrows():
-            self.md.add_last_price(time, self.ticker, row["Close"], 
+            self.md.add_last_price(time, self.ticker, row["Close"],
                                    row["Volume"])
             self.md.add_open_price(time, self.ticker, row["Open"])
 
             if self.event_tick is not None:
                 self.event_tick(self.md)
 
+
 class Order:
-    def __init__(self, timestamp, symbol, qty, is_buy, is_market_order, 
+    """
+    The Order class represents a single order sent by the strategy to the
+    server.
+
+    """
+
+    def __init__(self, timestamp, symbol, qty, is_buy, is_market_order,
                  price=0):
         self.timestamp = timestamp
         self.symbol = symbol
@@ -92,7 +113,14 @@ class Order:
         self.filled_time = None
         self.filled_qty = 0
 
+
 class Position:
+    """
+    The Position class helps us keep track of our current market position and
+    account balance.
+
+    """
+
     def __init__(self):
         self.symbol = None
         self.buys, self.sells, self.net = 0, 0, 0
@@ -121,8 +149,13 @@ class Position:
 
         return self.unrealized_pnl
 
-""" Base strategy for implementation. """
+
 class Strategy:
+    """
+    Base strategy for implementation.
+
+    """
+
     def __init__(self):
         self.event_sendorder = None
 
@@ -140,11 +173,14 @@ class Strategy:
             order = Order(timestamp, symbol, qty, is_buy, True)
             self.event_sendorder(order)
 
-""" Implementation of an MAC strategy based on the Strategy class. """
-import pandas as pd
 
 class MAC_Strategy(Strategy):
-    def __init__(self, symbol, lookback_intervals = 100, buy_threshold = -1.5, 
+    """
+    Implementation of an MAC strategy based on the Strategy class.
+
+    """
+
+    def __init__(self, symbol, lookback_intervals=20, buy_threshold=-1.5,
                  sell_threshold=1.5):
         Strategy.__init__(self)
         self.symbol = symbol
@@ -162,12 +198,13 @@ class MAC_Strategy(Strategy):
 
     def event_tick(self, market_data):
         self.store_prices(market_data)
-        #if len(self.prices) < self.lookback_intervals:
-        #    return
+        # if len(self.prices) < self.lookback_intervals:
+        #     return
 
-        signal_value = self.calculate_mac(20,50)
+        volatility_fraction = 0
+        signal_value = self.calculate_mac(20, 50)
         timestamp = market_data.get_timestamp(self.symbol)
-        signal_threshold = 0.2 * self.calculate_volatility()
+        signal_threshold = volatility_fraction * self.calculate_volatility()
 
         if signal_value > signal_threshold:
             self.on_buy_signal(timestamp)
@@ -188,22 +225,27 @@ class MAC_Strategy(Strategy):
         return mac
 
     def calculate_volatility(self):
-        prices = self.prices[-self.lookback_intervals:] 
-        returns = prices["close"].diff().dropna() 
+        prices = self.prices[-self.lookback_intervals:]
+        returns = prices["close"].diff().dropna()
         volatility = returns.std()
         return volatility
 
-    def on_buy_signal(self, timestamp): 
+    def on_buy_signal(self, timestamp):
         if not self.is_long:
             self.send_market_order(self.symbol, 100, True, timestamp)
 
-    def on_sell_signal(self, timestamp): 
+    def on_sell_signal(self, timestamp):
         if not self.is_short:
             self.send_market_order(self.symbol, 100, False, timestamp)
 
-import pandas as pd
+
 class Backtester:
-    def __init__(self, symbol, start_date, end_date, data_source="google"): 
+    """
+    Implementation of the backtesting engine, combining all core components.
+
+    """
+
+    def __init__(self, symbol, start_date, end_date, data_source="google"):
         self.target_symbol = symbol
         self.data_source = data_source
         self.start_dt = start_date
@@ -214,104 +256,113 @@ class Backtester:
         self.current_prices = None
         self.rpnl, self.upnl = pd.DataFrame(), pd.DataFrame()
 
-    def get_timestamp(self): 
+    def get_timestamp(self):
         return self.current_prices.get_timestamp(self.target_symbol)
 
-    def get_trade_date(self): 
-        timestamp = self.get_timestamp() 
+    def get_trade_date(self):
+        timestamp = self.get_timestamp()
         return timestamp.strftime("%Y-%m-%d")
 
-    def update_filled_position(self, symbol, qty, is_buy, price, timestamp): 
-        position = self.get_position(symbol) 
-        position.event_fill(timestamp, is_buy, qty, price) 
-        self.strategy.event_position(self.positions) 
+    def update_filled_position(self, symbol, qty, is_buy, price, timestamp):
+        position = self.get_position(symbol)
+        position.event_fill(timestamp, is_buy, qty, price)
+        self.strategy.event_position(self.positions)
         self.rpnl.loc[timestamp, "rpnl"] = position.realized_pnl
-        print (self.get_trade_date(), "Filled:", "BUY" if is_buy else "SELL", 
-               qty, symbol, "at", price)
+        print(self.get_trade_date(), "Filled:", "BUY" if is_buy else "SELL",
+              qty, symbol, "at", '{:,.0f}'.format(price))
 
     def get_position(self, symbol):
         if symbol not in self.positions:
-            position = Position() 
-            position.symbol = symbol 
+            position = Position()
+            position.symbol = symbol
             self.positions[symbol] = position
 
         return self.positions[symbol]
 
-    def evthandler_order(self, order): 
+    def evthandler_order(self, order):
         self.unfilled_orders.append(order)
 
-        print(self.get_trade_date(), "Received order:", "BUY" if order.is_buy 
+        print(self.get_trade_date(), "Received order:", "BUY" if order.is_buy
               else "SELL", order.qty, order.symbol)
 
-    def match_order_book(self, prices): 
+    def match_order_book(self, prices):
         if len(self.unfilled_orders) > 0:
             self.unfilled_orders = \
                 [order for order in self.unfilled_orders
                  if self.is_order_unmatched(order, prices)]
 
-    def is_order_unmatched(self, order, prices): 
+    def is_order_unmatched(self, order, prices):
         symbol = order.symbol
         timestamp = prices.get_timestamp(symbol)
 
-        if order.is_market_order and timestamp > order.timestamp: 
-        # Order is matched and filled.
+        if order.is_market_order and timestamp > order.timestamp:
+            # Order is matched and filled.
             order.is_filled = True
-            open_price = prices.get_open_price(symbol) 
+            open_price = prices.get_open_price(symbol)
             order.filled_timestamp = timestamp
-            order.filled_price = open_price 
-            self.update_filled_position(symbol,order.qty, order.is_buy, open_price, 
-                                    timestamp)
-            self.strategy.event_order(order) 
+            order.filled_price = open_price
+            self.update_filled_position(symbol, order.qty, order.is_buy,
+                                        open_price, timestamp)
+            self.strategy.event_order(order)
             return False
-            
+
         return True
 
-    def print_position_status(self, symbol, prices): 
+    def print_position_status(self, symbol, prices):
         if symbol in self.positions:
             position = self.positions[symbol]
-            close_price = prices.get_last_price(symbol) 
-            position.update_unrealized_pnl(close_price) 
+            close_price = prices.get_last_price(symbol)
+            position.update_unrealized_pnl(close_price)
             self.upnl.loc[self.get_timestamp(), "upnl"] = \
                 position.unrealized_pnl
 
-            print (self.get_trade_date(),
-                "Net:", position.net,
-                "Value:", position.position_value,
-                "UPnL:", position.unrealized_pnl,
-                "RPnL:", position.realized_pnl)
+            print(self.get_trade_date(), "Net:", position.net, "Value:",
+                  '{:,.0f}'.format(position.position_value), "UPnL:",
+                  '{:,.0f}'.format(position.unrealized_pnl), "RPnL:",
+                  '{:,.0f}'.format(position.realized_pnl))
 
     def evthandler_tick(self, prices):
-        self.current_prices = prices 
-        self.strategy.event_tick(prices) 
-        self.match_order_book(prices) 
+        self.current_prices = prices
+        self.strategy.event_tick(prices)
+        self.match_order_book(prices)
         self.print_position_status(self.target_symbol, prices)
 
     def start_backtest(self):
-        self.strategy = MAC_Strategy(self.target_symbol) 
+        self.strategy = MAC_Strategy(self.target_symbol)
         self.strategy.event_sendorder = self.evthandler_order
 
         mds = MarketDataSource()
-        mds.event_tick = self.evthandler_tick 
+        mds.event_tick = self.evthandler_tick
         mds.ticker = self.target_symbol
         mds.source = self.data_source
         mds.start, mds.end = self.start_dt, self.end_dt
 
         print("Backtesting started...")
-        mds.start_market_simulation() 
+        mds.start_market_simulation()
         print("Completed.")
 
-backtester = Backtester("XBTUSD", dt.datetime(2017, 7, 20), 
-                        dt.datetime(2020, 1, 1), data_source="csvfile")
+
+backtester = Backtester("XBTUSD", dt.datetime(2017, 7, 20),
+                        dt.datetime(2020, 1, 1), data_source="csv_file")
 backtester.start_backtest()
 
-import matplotlib.pyplot as plt
-backtester.rpnl.plot()
+
+def Num_Format(x, pos):
+    """
+    Define formatter for the chart.
+    The two arguments are the number and tick position.
+
+    """
+
+    string = '{:,.0f}'.format(x)
+    return string
+
+formatter = FuncFormatter(Num_Format)
+
+# Plotting the chart.
+fig, ax = plt.subplots()
+ax.plot(backtester.rpnl, label='RPNL')
+ax.grid(axis='both', linestyle='--', linewidth=.1)
+ax.yaxis.set_major_formatter(formatter)
+ax.legend()
 plt.show()
-
-
-
-
-
-
-
-
