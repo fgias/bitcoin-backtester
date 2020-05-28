@@ -174,7 +174,7 @@ class Strategy:
             self.event_sendorder(order)
 
 
-class MAC_Strategy(Strategy):
+class MACStrategy(Strategy):
     """
     Implementation of an MAC strategy based on the Strategy class.
 
@@ -328,7 +328,7 @@ class Backtester:
         self.print_position_status(self.target_symbol, prices)
 
     def start_backtest(self):
-        self.strategy = MAC_Strategy(self.target_symbol)
+        self.strategy = MACStrategy(self.target_symbol)
         self.strategy.event_sendorder = self.evthandler_order
 
         mds = MarketDataSource()
@@ -347,7 +347,7 @@ backtester = Backtester("XBTUSD", dt.datetime(2017, 7, 20),
 backtester.start_backtest()
 
 
-def Num_Format(x, pos):
+def _num_format(x, pos):
     """
     Define formatter for the chart.
     The two arguments are the number and tick position.
@@ -357,7 +357,7 @@ def Num_Format(x, pos):
     string = '{:,.0f}'.format(x)
     return string
 
-formatter = FuncFormatter(Num_Format)
+formatter = FuncFormatter(_num_format)
 
 # Plotting the chart.
 fig, ax = plt.subplots()
