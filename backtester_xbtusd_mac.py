@@ -83,6 +83,7 @@ class MarketDataSource:
         data = data.rename(columns={"open": "Open", "close": "Close", "volume":
                            "Volume"})
         data = data.iloc[::-1]
+        data = data.loc[self.start:self.end]
 
         for time, row in data.iterrows():
             self.md.add_last_price(time, self.ticker, row["Close"],
@@ -342,8 +343,8 @@ class Backtester:
         print("Completed.")
 
 
-backtester = Backtester("XBTUSD", dt.datetime(2017, 7, 20),
-                        dt.datetime(2018, 1, 1), data_source="csv_file")
+backtester = Backtester("XBTUSD", dt.date(2017, 7, 20),
+                        dt.date(2020, 1, 1), data_source="csv_file")
 backtester.start_backtest()
 
 
@@ -356,6 +357,7 @@ def _num_format(x, pos):
 
     string = '{:,.0f}'.format(x)
     return string
+
 
 formatter = FuncFormatter(_num_format)
 
