@@ -159,13 +159,13 @@ class Strategy:
     def __init__(self):
         self.event_sendorder = None
 
-    def event_tick(self, market_data):
+    def on_tick_event(self, market_data):
         pass
 
     def event_order(self, order):
         pass
 
-    def event_position(self, positions):
+    def update_position_status(self, positions):
         pass
 
     def send_market_order(self, symbol, qty, is_buy, timestamp):
@@ -190,13 +190,13 @@ class MACStrategy(Strategy):
         self.prices = pd.DataFrame()
         self.is_long, self.is_short = False, False
 
-    def event_position(self, positions):
+    def update_position_status(self, positions):
         if self.symbol in positions:
             position = positions[self.symbol]
             self.is_long = True if position.net > 0 else False
             self.is_short = True if position.net < 0 else False
 
-    def event_tick(self, market_data):
+    def on_tick_event(self, market_data):
         self.store_prices(market_data)
         # if len(self.prices) < self.lookback_intervals:
         #     return
@@ -266,7 +266,7 @@ class Backtester:
     def update_filled_position(self, symbol, qty, is_buy, price, timestamp):
         position = self.get_position(symbol)
         position.event_fill(timestamp, is_buy, qty, price)
-        self.strategy.event_position(self.positions)
+        self.strategy.update_position_status(self.positions)
         self.rpnl.loc[timestamp, "rpnl"] = position.realized_pnl
         print(self.get_trade_date(), "Filled:", "BUY" if is_buy else "SELL",
               qty, symbol, "at", '{:,.0f}'.format(price))
@@ -321,9 +321,9 @@ class Backtester:
                   '{:,.0f}'.format(position.unrealized_pnl), "RPnL:",
                   '{:,.0f}'.format(position.realized_pnl))
 
-    def evthandler_tick(self, prices):
+    def handle_incoming_tick(self, prices):
         self.current_prices = prices
-        self.strategy.event_tick(prices)
+        self.strategy.on_tick_event(prices)
         self.match_order_book(prices)
         self.print_position_status(self.target_symbol, prices)
 
@@ -332,7 +332,7 @@ class Backtester:
         self.strategy.event_sendorder = self.evthandler_order
 
         mds = MarketDataSource()
-        mds.event_tick = self.evthandler_tick
+        mds.event_tick = self.handle_incoming_tick
         mds.ticker = self.target_symbol
         mds.source = self.data_source
         mds.start, mds.end = self.start_dt, self.end_dt
@@ -343,7 +343,7 @@ class Backtester:
 
 
 backtester = Backtester("XBTUSD", dt.datetime(2017, 7, 20),
-                        dt.datetime(2020, 1, 1), data_source="csv_file")
+                        dt.datetime(2018, 1, 1), data_source="csv_file")
 backtester.start_backtest()
 
 
@@ -361,6 +361,7 @@ formatter = FuncFormatter(_num_format)
 
 # Plotting the chart.
 fig, ax = plt.subplots()
+plt.xticks(rotation=70)
 ax.plot(backtester.rpnl, label='RPNL')
 ax.grid(axis='both', linestyle='--', linewidth=.1)
 ax.yaxis.set_major_formatter(formatter)
