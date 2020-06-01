@@ -280,7 +280,7 @@ class Backtester:
 
         return self.positions[symbol]
 
-    def evthandler_order(self, order):
+    def handle_order(self, order):
         self.unfilled_orders.append(order)
 
         print(self.get_trade_date(), "Received order:", "BUY" if order.is_buy
@@ -330,7 +330,7 @@ class Backtester:
 
     def start_backtest(self):
         self.strategy = MACStrategy(self.target_symbol)
-        self.strategy.event_sendorder = self.evthandler_order
+        self.strategy.event_sendorder = self.handle_order
 
         mds = MarketDataSource()
         mds.event_tick = self.handle_incoming_tick
@@ -344,7 +344,7 @@ class Backtester:
 
 
 backtester = Backtester("XBTUSD", dt.date(2017, 7, 20),
-                        dt.date(2020, 1, 1), data_source="csv_file")
+                        dt.date(2018, 1, 1), data_source="csv_file")
 backtester.start_backtest()
 
 
