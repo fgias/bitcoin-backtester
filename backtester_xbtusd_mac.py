@@ -10,7 +10,8 @@ import pandas as pd
 from pandas_datareader import data as web
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
-STARTING_CASH = 1000000
+import sys
+STARTING_CASH = 500000
 
 
 class TickData:
@@ -283,6 +284,10 @@ class Backtester:
         self.strategy.update_position_status(self.positions)
         self.rpnl.loc[timestamp, "rpnl"] = position.realized_pnl
         self.cash = self.cash - (qty * price * (1 if is_buy else -1))
+        if self.cash < 0:
+            sys.exit(str(self.get_trade_date()) +
+                     " Error: Account balance insufficient to proceed!")
+
         print(self.get_trade_date(), "Filled:", "BUY" if is_buy else "SELL",
               qty, symbol, "at", '{:,.0f}'.format(price), "Account balance:",
               '{:,.0f}'.format(self.cash))
