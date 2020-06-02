@@ -10,6 +10,7 @@ import pandas as pd
 from pandas_datareader import data as web
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
+STARTING_CASH = 1000000
 
 
 class TickData:
@@ -231,6 +232,16 @@ class MACStrategy(Strategy):
         volatility = returns.std()
         return volatility
 
+    """
+    def calculate_position_sizing(self):
+        prices = self.prices["close"][-self.lookback_intervals:]
+        returns = prices["close"].diff().dropna()
+        kelly = .25 * (returns.mean())/((returns.std()) ** 2)
+        ...
+        return abs(position_size)
+
+    """
+
     def on_buy_signal(self, timestamp):
         if not self.is_long:
             self.send_market_order(self.symbol, 100, True, timestamp)
@@ -256,6 +267,8 @@ class Backtester:
         self.positions = dict()
         self.current_prices = None
         self.rpnl, self.upnl = pd.DataFrame(), pd.DataFrame()
+        # Add account balance.
+        self.cash = STARTING_CASH
 
     def get_timestamp(self):
         return self.current_prices.get_timestamp(self.target_symbol)
@@ -269,8 +282,10 @@ class Backtester:
         position.event_fill(timestamp, is_buy, qty, price)
         self.strategy.update_position_status(self.positions)
         self.rpnl.loc[timestamp, "rpnl"] = position.realized_pnl
+        self.cash = self.cash - (qty * price * (1 if is_buy else -1))
         print(self.get_trade_date(), "Filled:", "BUY" if is_buy else "SELL",
-              qty, symbol, "at", '{:,.0f}'.format(price))
+              qty, symbol, "at", '{:,.0f}'.format(price), "Account balance:",
+              '{:,.0f}'.format(self.cash))
 
     def get_position(self, symbol):
         if symbol not in self.positions:
@@ -339,13 +354,35 @@ class Backtester:
         mds.start, mds.end = self.start_dt, self.end_dt
 
         print("Backtesting started...")
+        print("Initial account balance:", '{:,.0f}'.format(STARTING_CASH))
         mds.start_market_simulation()
-        print("Completed.")
+        print("Backtest complete.")
 
 
-backtester = Backtester("XBTUSD", dt.date(2017, 7, 20),
-                        dt.date(2018, 1, 1), data_source="csv_file")
+backtester = Backtester("XBTUSD", dt.date(2017, 6, 19),
+                        dt.date(2020, 1, 1), data_source="csv_file")
 backtester.start_backtest()
+
+print("Liquidating open positions...")
+timestamp = backtester.get_timestamp()
+prices = backtester.current_prices
+close_price = prices.get_last_price(backtester.target_symbol)
+position = backtester.positions[backtester.target_symbol]
+backtester.strategy.send_market_order(backtester.target_symbol,
+                                      abs(position.net), True if position.net
+                                      < 0 else False, timestamp)
+backtester.update_filled_position(backtester.target_symbol, abs(position.net),
+                                  True if position.net < 0 else False,
+                                  close_price, timestamp)
+backtester.match_order_book(prices)
+backtester.print_position_status(backtester.target_symbol, prices)
+
+print("--------------------------------------------------------")
+print(" *  Initial account balance:", '{:,.0f}'.format(STARTING_CASH))
+print(" *  Final account balance:", '{:,.0f}'.format(backtester.cash))
+pctreturn = 100 * (backtester.cash - STARTING_CASH)/STARTING_CASH
+print(" * ", '{:,.0f}%'.format(pctreturn), "returns")
+print("--------------------------------------------------------")
 
 
 def _num_format(x, pos):
@@ -361,7 +398,7 @@ def _num_format(x, pos):
 
 formatter = FuncFormatter(_num_format)
 
-# Plotting the chart.
+# Plotting RPNL.
 fig, ax = plt.subplots()
 plt.xticks(rotation=70)
 ax.plot(backtester.rpnl, label='RPNL')
