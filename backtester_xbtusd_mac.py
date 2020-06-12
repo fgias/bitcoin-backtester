@@ -5,13 +5,19 @@ Also, the threshold for the MAC signal seems to reduce maximum drawdown but
 also reduces the overall performance.
 """
 
+import sys
 import datetime as dt
 import pandas as pd
+import numpy
 from pandas_datareader import data as web
 import matplotlib.pyplot as plt
 from matplotlib.ticker import FuncFormatter
-import sys
-STARTING_CASH = 500000
+import empyrical
+
+STARTING_CASH = 1000000
+NUM_CONTRACTS = 100
+START_DATE = dt.date(2019, 1, 1)
+END_DATE = dt.date(2020, 1, 1)
 
 
 class TickData:
@@ -75,19 +81,21 @@ class MarketDataSource:
         self.ticker, self.source = None, None
         self.start, self.end = None, None
         self.md = MarketData()
+        self.data = 0
+
+    def import_data(self):
+        self.data = pd.read_csv("XBTUSD_past1000_days.csv",
+                                parse_dates=["timestamp"])
+        self.data["Date"] = self.data["timestamp"].dt.date
+        self.data = self.data.set_index("Date")
+        self.data = self.data.drop(["timestamp"], axis=1)
+        self.data = self.data.rename(columns={"open": "Open", "close": "Close",
+                                     "volume": "Volume"})
+        self.data = self.data.iloc[::-1]
+        self.data = self.data.loc[self.start:self.end]
 
     def start_market_simulation(self):
-        data = pd.read_csv('XBTUSD_past1000_days.csv',
-                           parse_dates=['timestamp'])
-        data['Date'] = data['timestamp'].dt.date
-        data = data.set_index('Date')
-        data = data.drop(['timestamp'], axis=1)
-        data = data.rename(columns={"open": "Open", "close": "Close", "volume":
-                           "Volume"})
-        data = data.iloc[::-1]
-        data = data.loc[self.start:self.end]
-
-        for time, row in data.iterrows():
+        for time, row in self.data.iterrows():
             self.md.add_last_price(time, self.ticker, row["Close"],
                                    row["Volume"])
             self.md.add_open_price(time, self.ticker, row["Open"])
@@ -130,6 +138,7 @@ class Position:
         self.realized_pnl = 0
         self.unrealized_pnl = 0
         self.position_value = 0
+        self.equity = STARTING_CASH
 
     def event_fill(self, timestamp, is_buy, qty, price):
         if is_buy:
@@ -151,6 +160,9 @@ class Position:
             self.unrealized_pnl = price * self.net + self.position_value
 
         return self.unrealized_pnl
+
+    def update_equity(self, price, cash):
+        self.equity = cash + price * self.net
 
 
 class Strategy:
@@ -245,11 +257,12 @@ class MACStrategy(Strategy):
 
     def on_buy_signal(self, timestamp):
         if not self.is_long:
-            self.send_market_order(self.symbol, 100, True, timestamp)
+            self.send_market_order(self.symbol, NUM_CONTRACTS, True, timestamp)
 
     def on_sell_signal(self, timestamp):
         if not self.is_short:
-            self.send_market_order(self.symbol, 100, False, timestamp)
+            self.send_market_order(self.symbol, NUM_CONTRACTS, False,
+                                   timestamp)
 
 
 class Backtester:
@@ -270,6 +283,7 @@ class Backtester:
         self.rpnl, self.upnl = pd.DataFrame(), pd.DataFrame()
         # Add account balance.
         self.cash = STARTING_CASH
+        self.equity_curve = pd.DataFrame()
 
     def get_timestamp(self):
         return self.current_prices.get_timestamp(self.target_symbol)
@@ -289,8 +303,8 @@ class Backtester:
                      " Error: Account balance insufficient to proceed!")
 
         print(self.get_trade_date(), "Filled:", "BUY" if is_buy else "SELL",
-              qty, symbol, "at", '{:,.0f}'.format(price), "Account balance:",
-              '{:,.0f}'.format(self.cash))
+              qty, symbol, "at", "{:,.0f}".format(price), "Account balance:",
+              "{:,.0f}".format(self.cash))
 
     def get_position(self, symbol):
         if symbol not in self.positions:
@@ -337,10 +351,15 @@ class Backtester:
             self.upnl.loc[self.get_timestamp(), "upnl"] = \
                 position.unrealized_pnl
 
+            position.update_equity(close_price, self.cash)
+            self.equity_curve.loc[self.get_timestamp(), "equity"] = \
+                position.equity
+
             print(self.get_trade_date(), "Net:", position.net, "Value:",
-                  '{:,.0f}'.format(position.position_value), "UPnL:",
-                  '{:,.0f}'.format(position.unrealized_pnl), "RPnL:",
-                  '{:,.0f}'.format(position.realized_pnl))
+                  "{:,.0f}".format(position.position_value), "UPnL:",
+                  "{:,.0f}".format(position.unrealized_pnl), "RPnL:",
+                  "{:,.0f}".format(position.realized_pnl), "Equity:",
+                  "{:,.0f}".format(position.equity))
 
     def handle_incoming_tick(self, prices):
         self.current_prices = prices
@@ -359,13 +378,13 @@ class Backtester:
         mds.start, mds.end = self.start_dt, self.end_dt
 
         print("Backtesting started...")
-        print("Initial account balance:", '{:,.0f}'.format(STARTING_CASH))
+        print("Initial account balance:", "{:,.0f}".format(STARTING_CASH))
+        mds.import_data()
         mds.start_market_simulation()
         print("Backtest complete.")
 
 
-backtester = Backtester("XBTUSD", dt.date(2017, 6, 19),
-                        dt.date(2020, 1, 1), data_source="csv_file")
+backtester = Backtester("XBTUSD", START_DATE, END_DATE, data_source="csv_file")
 backtester.start_backtest()
 
 print("Liquidating open positions...")
@@ -373,20 +392,70 @@ timestamp = backtester.get_timestamp()
 prices = backtester.current_prices
 close_price = prices.get_last_price(backtester.target_symbol)
 position = backtester.positions[backtester.target_symbol]
+direction = True if position.net < 0 else False
 backtester.strategy.send_market_order(backtester.target_symbol,
-                                      abs(position.net), True if position.net
-                                      < 0 else False, timestamp)
+                                      abs(position.net), direction, timestamp)
 backtester.update_filled_position(backtester.target_symbol, abs(position.net),
-                                  True if position.net < 0 else False,
-                                  close_price, timestamp)
+                                  direction, close_price, timestamp)
 backtester.match_order_book(prices)
 backtester.print_position_status(backtester.target_symbol, prices)
 
+# Replace zeroes with previous non-zero value.
+# upnl = backtester.upnl.replace(to_replace=0, method="ffill")
+# Calculation of daily returns.
+# ret = upnl["upnl"].diff().fillna(0)
+# ret_pct = upnl["upnl"].pct_change().fillna(0)
+
+ret = backtester.equity_curve["equity"].diff().fillna(0)
+ret_pct = backtester.equity_curve["equity"].pct_change().fillna(0)
+
+mds = MarketDataSource()
+mds.start = backtester.start_dt
+mds.end = backtester.end_dt
+mds.import_data()
+data = mds.data
+xbtusd_ret = data["Close"].diff().fillna(0)
+xbtusd_ret_pct = data["Close"].pct_change().fillna(0)
+
+strategy_sr = float(empyrical.sharpe_ratio(ret_pct))
+xbtusd_sr = float(empyrical.sharpe_ratio(xbtusd_ret_pct))
+
+max_dd = float(100 * empyrical.max_drawdown(ret_pct))
+
+pctreturn = 100 * ((backtester.cash - STARTING_CASH) / STARTING_CASH)
+
+# Aggregate returns.
+monthly_ret = empyrical.aggregate_returns(ret_pct, "monthly") * 100
 print("--------------------------------------------------------")
-print(" *  Initial account balance:", '{:,.0f}'.format(STARTING_CASH))
-print(" *  Final account balance:", '{:,.0f}'.format(backtester.cash))
-pctreturn = 100 * (backtester.cash - STARTING_CASH)/STARTING_CASH
-print(" * ", '{:,.0f}%'.format(pctreturn), "returns")
+print("Monthly returns %")
+print(monthly_ret)
+print("--------------------------------------------------------")
+
+annual_ret = empyrical.aggregate_returns(ret_pct, "yearly") * 100
+print("Annual returns %")
+print(annual_ret)
+
+cum_ret = empyrical.cum_returns(ret_pct) * 100
+
+xbtusd_cum_ret = empyrical.cum_returns(xbtusd_ret_pct)
+
+
+# Annual volatility.
+annual_vol = 100 * empyrical.annual_volatility(ret_pct)
+annual_vol_xbtusd = 100 * empyrical.annual_volatility(xbtusd_ret_pct)
+
+print("--------------------------------------------------------")
+print(" *  Initial account balance:", "{:,.0f}".format(STARTING_CASH))
+print(" *  Final account balance:", "{:,.0f}".format(backtester.cash))
+print(" * ", "Return on equity = ", "{:,.0f}%".format(pctreturn))
+print(" * ", "Annual volatility =", "{:,.1f}%".format(annual_vol))
+print(" * ", "Sharpe ratio =", "{:,.2f}".format(strategy_sr))
+print(" * ", "Maximum drawdown =", "{:,.1f}%".format(max_dd))
+print(" * ", "XBTUSD Sharpe ratio =", "{:,.2f}".format(xbtusd_sr))
+print(" * ", "XBTUSD annual volatility =",
+      "{:,.1f}%".format(annual_vol_xbtusd))
+print(" * ", "XBTUSD return = ", "{:,.0f}%".format(xbtusd_cum_ret.iloc[-1] *
+      100))
 print("--------------------------------------------------------")
 
 
@@ -397,7 +466,7 @@ def _num_format(x, pos):
 
     """
 
-    string = '{:,.0f}'.format(x)
+    string = "{:,.0f}".format(x)
     return string
 
 
@@ -406,8 +475,8 @@ formatter = FuncFormatter(_num_format)
 # Plotting RPNL.
 fig, ax = plt.subplots()
 plt.xticks(rotation=70)
-ax.plot(backtester.rpnl, label='RPNL')
-ax.grid(axis='both', linestyle='--', linewidth=.1)
+ax.plot(backtester.rpnl, label="RPNL")
+ax.grid(axis="both", linestyle="--", linewidth=.1)
 ax.yaxis.set_major_formatter(formatter)
 ax.legend()
 plt.show()
